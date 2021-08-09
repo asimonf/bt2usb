@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using bt2usb.HID;
@@ -41,7 +42,7 @@ namespace bt2usb
             
             Console.WriteLine("Finding Devices according to the config");
             var manager = new DeviceManager(config);
-            manager.FindDevices();
+            manager.Setup();
             
             Task.Factory.StartNew(() => 
             {
@@ -56,6 +57,90 @@ namespace bt2usb
             {
                 Thread.Sleep(1);
             }
+        }
+        
+        public static void DescribeDevice(Device device)
+        {
+            Console.WriteLine("--- START ---");
+
+            try
+            {
+                Console.WriteLine("Driver {0}", device.Driver);
+            }
+            catch
+            {
+                Console.WriteLine("No driver");
+            }
+
+            Console.WriteLine("Subsystem {0}", device.Subsystem);
+            Console.WriteLine("DevPath {0}", device.DevPath);
+
+            try
+            {
+                foreach (var link in device.Tags)
+                {
+                    Console.WriteLine("Tag {0}", link);
+                }
+            }
+            catch
+            {
+                Console.WriteLine("No tags");
+            }
+
+            try
+            {
+                foreach (var link in device.AttributeNames)
+                {
+                    var value = "No value";
+
+                    try
+                    {
+                        var ret = device.TryGetAttribute(link);
+
+                        value = link == "report_descriptor"
+                            ? BitConverter.ToString(ret)
+                            : Encoding.ASCII.GetString(ret);
+                    }
+                    catch
+                    {
+                        // ignored
+                    }
+
+                    if (link == "report_descriptor")
+                    {
+                    }
+
+                    Console.WriteLine("Attribute {0}: {1}", link, value);
+                }
+            }
+            catch
+            {
+                Console.WriteLine("No attributes");
+            }
+
+            try
+            {
+                foreach (var link in device.DevLinks)
+                {
+                    Console.WriteLine("Tag {0}", link);
+                }
+            }
+            catch
+            {
+                Console.WriteLine("No links");
+            }
+
+            Console.WriteLine("DevNode {0}", device.DevNode);
+            Console.WriteLine("SysName {0}", device.SysName);
+
+            foreach (var (key, value) in device.Properties)
+            {
+                Console.WriteLine("Property {0}: {1}", key, value);
+            }
+
+            Console.WriteLine("SysPath {0}", device.SysPath);
+            Console.WriteLine("--- END ---");
+            Console.WriteLine();
         }
     }
 }

@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "bt2usb", "bt2usb\bt2usb.csproj", "{71DE18B2-37D0-4A5E-9319-43371DA3B0D6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestServer", "TestServer\TestServer.csproj", "{5431C4FA-FB50-4FFF-9FDF-8963C2376ECE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +14,9 @@ Global
 		{71DE18B2-37D0-4A5E-9319-43371DA3B0D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{71DE18B2-37D0-4A5E-9319-43371DA3B0D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{71DE18B2-37D0-4A5E-9319-43371DA3B0D6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5431C4FA-FB50-4FFF-9FDF-8963C2376ECE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5431C4FA-FB50-4FFF-9FDF-8963C2376ECE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5431C4FA-FB50-4FFF-9FDF-8963C2376ECE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5431C4FA-FB50-4FFF-9FDF-8963C2376ECE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
