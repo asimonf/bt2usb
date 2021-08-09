@@ -117,8 +117,6 @@ namespace bt2usb.HID
                     }
 
                     var bufSpan = new ReadOnlySpan<byte>(buf, (int) len);
-                    Console.WriteLine("[in] -> {0}", BitConverter.ToString(bufSpan.ToArray()));
-
                     _clientStream.Write(bufSpan);
                 }
                 else if (
