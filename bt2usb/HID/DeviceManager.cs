@@ -13,50 +13,22 @@ using Monitor = bt2usb.Linux.Udev.Monitor;
 
 namespace bt2usb.HID
 {
-    public class DeviceManager: IDisposable
+    public class DeviceManager : IDisposable
     {
         private readonly Config.Config _config;
-        private readonly Dictionary<Device.TypeEnum, DeviceDescriptor> _pipeDictionary = new Dictionary<Device.TypeEnum, DeviceDescriptor>();
-        private readonly List<Task> _tasks = new List<Task>();
-        private readonly Listener _listener = new Listener();
-        private readonly Dictionary<string, byte> _gamepadIdDictionary = new Dictionary<string, byte>();
         private readonly Dictionary<string, Device> _deviceDict = new Dictionary<string, Device>();
-
-        private readonly Context _udevContext = new Context();
+        private readonly Dictionary<string, byte> _gamepadIdDictionary = new Dictionary<string, byte>();
+        private readonly Listener _listener = new Listener();
         private readonly Monitor _monitor;
 
+        private readonly Dictionary<Device.TypeEnum, DeviceDescriptor> _pipeDictionary =
+            new Dictionary<Device.TypeEnum, DeviceDescriptor>();
+
+        private readonly List<Task> _tasks = new List<Task>();
+
+        private readonly Context _udevContext = new Context();
+
         private bool _setup;
-
-        public bool IsForwarding { get; private set; }
-
-        private class DeviceDescriptor : IDisposable
-        {
-            private readonly string _hidRawDevNode;
-            private readonly string _hidGadgetDevNode;
-
-            public int HidRawFd { get; private set; }
-            public int HidGadgetFd { get; private set; }
-
-            public DeviceDescriptor(string hidRawDevNode, string hidGadgetDevNode)
-            {
-                _hidRawDevNode = hidRawDevNode;
-                _hidGadgetDevNode = hidGadgetDevNode;
-                
-                HidRawFd = -1;
-                HidGadgetFd = -1;
-            }
-            public void OpenDevNodes()
-            {
-                HidRawFd = Syscall.open(_hidRawDevNode, OpenFlags.O_RDWR);
-                HidGadgetFd = Syscall.open(_hidGadgetDevNode, OpenFlags.O_RDWR); 
-            }
-
-            public void Dispose()
-            {
-                if (HidRawFd >= 0) Syscall.close(HidRawFd);
-                if (HidGadgetFd >= 0) Syscall.close(HidGadgetFd);
-            }
-        }
 
         public DeviceManager(Config.Config config)
         {
@@ -65,12 +37,24 @@ namespace bt2usb.HID
             _monitor.AddMatchSubsystem("hid");
         }
 
+        public bool IsForwarding { get; private set; }
+
+        public void Dispose()
+        {
+            foreach (var (_, value) in _pipeDictionary) value.Dispose();
+
+            _listener.Stop();
+
+            _monitor.Dispose();
+            _udevContext.Dispose();
+        }
+
         public void Setup()
         {
             if (_setup) return;
 
             _listener.Start();
-            
+
             using var hidEnumerator = new Enumerator(_udevContext);
             hidEnumerator.AddMatchSubsystem("hid");
             foreach (var configDevice in _config.Devices)
@@ -90,10 +74,10 @@ namespace bt2usb.HID
                 ).SingleOrDefault();
 
                 if (string.IsNullOrEmpty(uniq)) continue;
-                
+
                 ProcessDevice(uniq, device);
             }
-            
+
             _setup = true;
         }
 
@@ -126,7 +110,9 @@ namespace bt2usb.HID
             {
                 byte id;
                 if (_gamepadIdDictionary.ContainsKey(uniq))
+                {
                     id = _gamepadIdDictionary[uniq];
+                }
                 else
                 {
                     id = (byte) _gamepadIdDictionary.Count;
@@ -163,7 +149,7 @@ namespace bt2usb.HID
         {
             if (IsForwarding) return;
             IsForwarding = true;
-            
+
             _monitor.EnableReceiving();
             _tasks.Add(Task.Factory.StartNew(() =>
             {
@@ -175,7 +161,7 @@ namespace bt2usb.HID
                         events = PollEvents.POLLIN | PollEvents.POLLERR | PollEvents.POLLHUP
                     }
                 };
-                
+
                 while (IsForwarding)
                 {
                     var ret = Syscall.poll(pollArr, 1000);
@@ -183,10 +169,10 @@ namespace bt2usb.HID
                     {
                         Console.WriteLine("Error poll monitor");
                         return;
-                    } 
-                
+                    }
+
                     if (ret == 0) continue;
-                
+
                     if ((pollArr[0].revents & PollEvents.POLLIN) != 0)
                     {
                         var device = _monitor.TryReceiveDevice();
@@ -201,7 +187,7 @@ namespace bt2usb.HID
                             if (string.IsNullOrEmpty(uniq)) continue;
                             if (!_deviceDict.ContainsKey(uniq)) continue;
 
-                            Console.Write("{0} -> {1}", uniq, device.Action);
+                            Console.WriteLine("{0} -> {1}", uniq, device.Action);
 
                             if (device.Action == "add")
                                 ProcessDevice(uniq, device);
@@ -219,11 +205,9 @@ namespace bt2usb.HID
                     Thread.Yield();
                 }
             }));
-            
+
             foreach (var (type, descriptor) in _pipeDictionary)
-            {
                 _tasks.Add(Task.Factory.StartNew(() => ForwardLoop(descriptor, type)));
-            }
         }
 
         public void StopForwarding()
@@ -233,7 +217,7 @@ namespace bt2usb.HID
             IsForwarding = false;
 
             Task.WaitAll(_tasks.ToArray());
-            
+
             _listener.Stop();
         }
 
@@ -244,13 +228,8 @@ namespace bt2usb.HID
                 case Device.TypeEnum.Keyboard:
                     return len;
                 case Device.TypeEnum.Mouse:
-                    for (var i = 1; i < len; ++i)
-                    {
-                        buf[i - 1] = buf[i];
-                    }
+                    for (var i = 1; i < len; ++i) buf[i - 1] = buf[i];
                     return len - 1;
-                case Device.TypeEnum.DS4:
-                    return len;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(typeEnum), typeEnum, null);
             }
@@ -287,13 +266,12 @@ namespace bt2usb.HID
                     }
 
                     var bufSpan = new ReadOnlySpan<byte>(buf, (int) len);
-                    Console.WriteLine("[in] -> {0}", BitConverter.ToString(bufSpan.ToArray()));
 
                     len = InputFilter(buf, len, type);
 
                     if (len > 0)
                     {
-                        len = Syscall.write(descriptor.HidGadgetFd, buf, (ulong)len); // Transfer report to hidg device
+                        len = Syscall.write(descriptor.HidGadgetFd, buf, (ulong) len); // Transfer report to hidg device
                         if (len < 0)
                         {
                             Console.WriteLine("Error write");
@@ -301,7 +279,7 @@ namespace bt2usb.HID
                         }
                     }
                 }
-                
+
                 // Direction: hidgFd -> hidRawFd
                 if (HidHelperH.FD_ISSET(descriptor.HidGadgetFd, &fds))
                 {
@@ -320,17 +298,34 @@ namespace bt2usb.HID
             }
         }
 
-        public void Dispose()
+        private class DeviceDescriptor : IDisposable
         {
-            foreach (var (_, value) in _pipeDictionary)
+            private readonly string _hidGadgetDevNode;
+            private readonly string _hidRawDevNode;
+
+            public DeviceDescriptor(string hidRawDevNode, string hidGadgetDevNode)
             {
-                value.Dispose();
+                _hidRawDevNode = hidRawDevNode;
+                _hidGadgetDevNode = hidGadgetDevNode;
+
+                HidRawFd = -1;
+                HidGadgetFd = -1;
             }
 
-            _listener.Stop();
-            
-            _monitor.Dispose();
-            _udevContext.Dispose();
+            public int HidRawFd { get; private set; }
+            public int HidGadgetFd { get; private set; }
+
+            public void Dispose()
+            {
+                if (HidRawFd >= 0) Syscall.close(HidRawFd);
+                if (HidGadgetFd >= 0) Syscall.close(HidGadgetFd);
+            }
+
+            public void OpenDevNodes()
+            {
+                HidRawFd = Syscall.open(_hidRawDevNode, OpenFlags.O_RDWR);
+                HidGadgetFd = Syscall.open(_hidGadgetDevNode, OpenFlags.O_RDWR);
+            }
         }
     }
 }

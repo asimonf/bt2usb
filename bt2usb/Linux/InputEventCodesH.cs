@@ -22,7 +22,7 @@ namespace bt2usb.Linux
         public const uint INPUT_PROP_ACCELEROMETER = 0x06; /* has accelerometer */
 
         public const uint INPUT_PROP_MAX = 0x1f;
-        public const uint INPUT_PROP_CNT = (INPUT_PROP_MAX + 1);
+        public const uint INPUT_PROP_CNT = INPUT_PROP_MAX + 1;
 
         /*
          * Event types
@@ -41,7 +41,7 @@ namespace bt2usb.Linux
         public const uint EV_PWR = 0x16;
         public const uint EV_FF_STATUS = 0x17;
         public const uint EV_MAX = 0x1f;
-        public const uint EV_CNT = (EV_MAX + 1);
+        public const uint EV_CNT = EV_MAX + 1;
 
         /*
          * Synchronization events.
@@ -52,7 +52,7 @@ namespace bt2usb.Linux
         public const uint SYN_MT_REPORT = 2;
         public const uint SYN_DROPPED = 3;
         public const uint SYN_MAX = 0xf;
-        public const uint SYN_CNT = (SYN_MAX + 1);
+        public const uint SYN_CNT = SYN_MAX + 1;
 
         /*
          * Keys and buttons
@@ -295,7 +295,8 @@ namespace bt2usb.Linux
         public const uint KEY_BRIGHTNESSUP = 225;
         public const uint KEY_MEDIA = 226;
 
-        public const uint KEY_SWITCHVIDEOMODE = 227; /* Cycle between available video outputs (Monitor/LCD/TV-out/etc) */
+        public const uint
+            KEY_SWITCHVIDEOMODE = 227; /* Cycle between available video outputs (Monitor/LCD/TV-out/etc) */
 
         public const uint KEY_KBDILLUMTOGGLE = 228;
         public const uint KEY_KBDILLUMDOWN = 229;
@@ -319,10 +320,10 @@ namespace bt2usb.Linux
         public const uint KEY_VIDEO_PREV = 242; /* drive previous video source */
         public const uint KEY_BRIGHTNESS_CYCLE = 243; /* brightness up, after max is min */
 
-        public const uint KEY_BRIGHTNESS_AUTO = 244; 
+        public const uint KEY_BRIGHTNESS_AUTO = 244;
         /* Set Auto Brightness: manual
-					      brightness control is off,
-					      rely on ambient */
+           brightness control is off,
+           rely on ambient */
 
         public const uint KEY_BRIGHTNESS_ZERO = KEY_BRIGHTNESS_AUTO;
         public const uint KEY_DISPLAY_OFF = 245; /* display device to off state */
@@ -663,21 +664,21 @@ namespace bt2usb.Linux
         /* Select an area of screen to be copied */
         public const uint KEY_SELECTIVE_SCREENSHOT = 0x27a;
 
-       /*
-        * Some keyboards have keys which do not have a defined meaning, these keys
-        * are intended to be programmed / bound to macros by the user. For most
-        * keyboards with these macro-keys the key-sequence to inject, or action to
-        * take, is all handled by software on the host side. So from the kernel's
-        * point of view these are just normal keys.
-        *
-        * The KEY_MACRO# codes below are intended for such keys, which may be labeled
-        * e.g. G1-G18, or S1 - S30. The KEY_MACRO# codes MUST NOT be used for keys
-        * where the marking on the key does indicate a defined meaning / purpose.
-        *
-        * The KEY_MACRO# codes MUST also NOT be used as fallback for when no existing
-        * KEY_FOO define matches the marking / purpose. In this case a new KEY_FOO
-        * define MUST be added.
-        */
+        /*
+         * Some keyboards have keys which do not have a defined meaning, these keys
+         * are intended to be programmed / bound to macros by the user. For most
+         * keyboards with these macro-keys the key-sequence to inject, or action to
+         * take, is all handled by software on the host side. So from the kernel's
+         * point of view these are just normal keys.
+         *
+         * The KEY_MACRO# codes below are intended for such keys, which may be labeled
+         * e.g. G1-G18, or S1 - S30. The KEY_MACRO# codes MUST NOT be used for keys
+         * where the marking on the key does indicate a defined meaning / purpose.
+         *
+         * The KEY_MACRO# codes MUST also NOT be used as fallback for when no existing
+         * KEY_FOO define matches the marking / purpose. In this case a new KEY_FOO
+         * define MUST be added.
+         */
         public const uint KEY_MACRO1 = 0x290;
         public const uint KEY_MACRO2 = 0x291;
         public const uint KEY_MACRO3 = 0x292;
@@ -709,16 +710,16 @@ namespace bt2usb.Linux
         public const uint KEY_MACRO29 = 0x2ac;
         public const uint KEY_MACRO30 = 0x2ad;
 
-       /*
-        * Some keyboards with the macro-keys described above have some extra keys
-        * for controlling the host-side software responsible for the macro handling:
-        * -A macro recording start/stop key. Note that not all keyboards which emit
-        *  KEY_MACRO_RECORD_START will also emit KEY_MACRO_RECORD_STOP if
-        *  KEY_MACRO_RECORD_STOP is not advertised, then KEY_MACRO_RECORD_START
-        *  should be interpreted as a recording start/stop toggle;
-        * -Keys for switching between different macro (pre)sets, either a key for
-        *  cycling through the configured presets or keys to directly select a preset.
-        */
+        /*
+         * Some keyboards with the macro-keys described above have some extra keys
+         * for controlling the host-side software responsible for the macro handling:
+         * -A macro recording start/stop key. Note that not all keyboards which emit
+         *  KEY_MACRO_RECORD_START will also emit KEY_MACRO_RECORD_STOP if
+         *  KEY_MACRO_RECORD_STOP is not advertised, then KEY_MACRO_RECORD_START
+         *  should be interpreted as a recording start/stop toggle;
+         * -Keys for switching between different macro (pre)sets, either a key for
+         *  cycling through the configured presets or keys to directly select a preset.
+         */
         public const uint KEY_MACRO_RECORD_START = 0x2b0;
         public const uint KEY_MACRO_RECORD_STOP = 0x2b1;
         public const uint KEY_MACRO_PRESET_CYCLE = 0x2b2;
@@ -783,7 +784,7 @@ namespace bt2usb.Linux
         /* We avoid low common keys in module aliases so they don't get huge. */
         public const uint KEY_MIN_INTERESTING = KEY_MUTE;
         public const uint KEY_MAX = 0x2ff;
-        public const uint KEY_CNT = (KEY_MAX + 1);
+        public const uint KEY_CNT = KEY_MAX + 1;
 
         /*
          * Relative axes
@@ -812,7 +813,7 @@ namespace bt2usb.Linux
         public const uint REL_WHEEL_HI_RES = 0x0b;
         public const uint REL_HWHEEL_HI_RES = 0x0c;
         public const uint REL_MAX = 0x0f;
-        public const uint REL_CNT = (REL_MAX + 1);
+        public const uint REL_CNT = REL_MAX + 1;
 
         /*
          * Absolute axes
@@ -873,7 +874,7 @@ namespace bt2usb.Linux
         public const uint ABS_MT_TOOL_Y = 0x3d; /* Center Y tool position */
 
         public const uint ABS_MAX = 0x3f;
-        public const uint ABS_CNT = (ABS_MAX + 1);
+        public const uint ABS_CNT = ABS_MAX + 1;
 
         /*
          * Switch events
@@ -898,7 +899,7 @@ namespace bt2usb.Linux
         public const uint SW_PEN_INSERTED = 0x0f; /* set = pen inserted */
         public const uint SW_MACHINE_COVER = 0x10; /* set = cover closed */
         public const uint SW_MAX = 0x10;
-        public const uint SW_CNT = (SW_MAX + 1);
+        public const uint SW_CNT = SW_MAX + 1;
 
         /*
          * Misc events
@@ -911,7 +912,7 @@ namespace bt2usb.Linux
         public const uint MSC_SCAN = 0x04;
         public const uint MSC_TIMESTAMP = 0x05;
         public const uint MSC_MAX = 0x07;
-        public const uint MSC_CNT = (MSC_MAX + 1);
+        public const uint MSC_CNT = MSC_MAX + 1;
 
         /*
          * LEDs
@@ -929,7 +930,7 @@ namespace bt2usb.Linux
         public const uint LED_MAIL = 0x09;
         public const uint LED_CHARGING = 0x0a;
         public const uint LED_MAX = 0x0f;
-        public const uint LED_CNT = (LED_MAX + 1);
+        public const uint LED_CNT = LED_MAX + 1;
 
         /*
          * Autorepeat values
@@ -938,16 +939,16 @@ namespace bt2usb.Linux
         public const uint REP_DELAY = 0x00;
         public const uint REP_PERIOD = 0x01;
         public const uint REP_MAX = 0x01;
-        public const uint REP_CNT = (REP_MAX + 1);
+        public const uint REP_CNT = REP_MAX + 1;
 
         /*
          * Sounds
          */
-        
+
         public const uint SND_CLICK = 0x00;
         public const uint SND_BELL = 0x01;
         public const uint SND_TONE = 0x02;
         public const uint SND_MAX = 0x07;
-        public const uint SND_CNT = (SND_MAX + 1);
+        public const uint SND_CNT = SND_MAX + 1;
     }
 }
