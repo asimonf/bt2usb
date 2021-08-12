@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
@@ -14,49 +13,75 @@ namespace TestServer
 {
     static class Program
     {
-        static void Main(string[] args)
+        private static object _syncRoot = new object();
+        private static NetworkStream _stream;
+        private static bool _running = true;
+        
+        static async Task Main(string[] args)
         {
             var dict = new ConcurrentDictionary<byte, IDualShock4Controller>();
             using var vigem = new ViGEmClient();
-            
-            var receiverEndpoint = new IPEndPoint(IPAddress.Parse("192.168.7.2"), 32100);
-            var receiverClient = new TcpClient();
-            receiverClient.Connect(receiverEndpoint);
-            var receiverStream = receiverClient.GetStream();
-            receiverStream.ReadTimeout = -1;
-            
-            var senderEndpoint = new IPEndPoint(IPAddress.Parse("192.168.7.2"), 32101);
-            var senderClient = new TcpClient();
-            senderClient.Connect(senderEndpoint);
-            var senderStream = senderClient.GetStream();
 
-            var task = Task.Factory.StartNew(() => Forwarder(vigem, receiverStream, senderStream, dict));
+            Console.CancelKeyPress += (sender, eventArgs) => _running = false; 
 
-            task.Wait();
+            while (_running)
+            {
+                try
+                {
+                    await Setup("192.168.7.2", vigem, dict);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e.Message);
+                }                
+            }
         }
 
-        private static unsafe void Forwarder(
-            ViGEmClient vigem, 
-            Stream receiverStream,
-            Stream senderStream,
+        private static async Task Setup(
+            string ip,
+            ViGEmClient vigem,
             ConcurrentDictionary<byte, IDualShock4Controller> dualShock4Controllers
         )
         {
-            var buffer = stackalloc byte[128];
+            using var client = new TcpClient {LingerState = {Enabled = false}};
+
+            await client.ConnectAsync(IPAddress.Parse(ip), 32100);
+            
+            lock (_syncRoot)
+                _stream = client.GetStream();
+
+            await Forwarder(vigem, dualShock4Controllers);
+            
+            client.Close();
+        }
+
+        private static async Task Forwarder(
+            ViGEmClient vigem,
+            ConcurrentDictionary<byte,IDualShock4Controller> dualShock4Controllers
+        )
+        {
+            var buffer = new byte[128];
             var report = new byte[63];
 
-            var buffSpan = new Span<byte>(buffer, 128);
-            
             while (true)
             {
-                var packetSize = receiverStream.ReadByte();
+                if (!_stream.DataAvailable) continue;
+                
+                var resp = await _stream.ReadAsync(buffer, 0, 1);
+                if (resp <= 0)
+                {
+                    throw new Exception("Error reading from receiver");
+                }
+                
+                var packetSize = buffer[0];
                 if (packetSize != 79) continue;
 
-                buffSpan.Fill(0);
+                Array.Fill<byte>(buffer, 0);
+
                 var bytesReadSoFar = 0;
                 while (bytesReadSoFar < packetSize)
                 {
-                    var bytesRead = receiverStream.Read(buffSpan.Slice(bytesReadSoFar, packetSize - bytesReadSoFar));
+                    var bytesRead = await _stream.ReadAsync(buffer, bytesReadSoFar, packetSize - bytesReadSoFar);
                     if (bytesRead <= 0) break;
 
                     bytesReadSoFar += bytesRead;
@@ -68,20 +93,7 @@ namespace TestServer
                     continue;
                 }
                 
-                // byte btHeader = 0xa2;
-                // var crc = CRC32Calculator.SEED;
-                // CRC32Calculator.Add(ref crc, new ReadOnlySpan<byte>(&btHeader, 1));
-                // CRC32Calculator.Add(ref crc, buffSpan[..^4]);
-                // crc = CRC32Calculator.Finalize(crc);
-                //
-                // var currentCrc = BitConverter.ToInt32(buffSpan.Slice(buffSpan.Length - 4, 4));
-                //
-                // if (crc != currentCrc)
-                // {
-                //     Console.WriteLine("curr: {0}, calc: {1}", currentCrc, crc);
-                // }
-                
-                buffSpan.Slice(3, report.Length).CopyTo(report);
+                Buffer.BlockCopy(buffer, 3, report, 0, report.Length);
                 
                 var id = buffer[packetSize - 1];
                 if (id != 0)
@@ -98,9 +110,17 @@ namespace TestServer
                     controller = vigem.CreateDualShock4Controller();
                     dualShock4Controllers.TryAdd(id, controller);
                     controller.Connect();
-                    controller.FeedbackReceived += (_, eventArgs) =>
+                    controller.FeedbackReceived += (state, eventArgs) =>
                     {
-                        ControllerOnFeedbackReceived(id, eventArgs, senderStream);
+                        try
+                        {
+                            ControllerOnFeedbackReceived(id, state as IDualShock4Controller, eventArgs);
+                        }
+                        catch
+                        {
+                            controller.Disconnect();
+                            dualShock4Controllers.TryRemove(id, out _);
+                        }
                     };
                 }
                 else
@@ -109,25 +129,24 @@ namespace TestServer
                 }
                 
                 controller.SubmitRawReport(report);
-                Task.Yield();
+                await Task.Yield();
             }
         }
 
         private static unsafe void ControllerOnFeedbackReceived(
             byte id, 
-            DualShock4FeedbackReceivedEventArgs e,
-            Stream senderStream
+            IDualShock4Controller controller,
+            DualShock4FeedbackReceivedEventArgs e
         )
         {
             const int size = 79;
             var data = stackalloc byte[size];
-            var offset = 0;
 
             data[0] = 0x11;
             data[1] = 0xC0;
             data[3] = 0x07;
 
-            offset = 6;
+            var offset = 6;
 
             data[offset++] = e.SmallMotor;
             data[offset++] = e.LargeMotor;
@@ -150,7 +169,9 @@ namespace TestServer
             data[size - 1] = id;
 
             var buff = new ReadOnlySpan<byte>(data, size);
-            senderStream.Write(buff);
+
+            lock (_syncRoot)
+                _stream.Write(buff);
         }
     }
 }

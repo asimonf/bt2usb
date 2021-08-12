@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -8,67 +9,44 @@ using Mono.Unix.Native;
 
 namespace bt2usb.HID
 {
-    public class Listener
+    public class Listener: IDisposable
     {
         private readonly ConcurrentDictionary<byte, int> _fdDictionary;
-        private readonly ConcurrentQueue<(string rawHidPath, byte id)> _hidRawList;
-        private readonly TcpListener _inputServer;
-        private readonly TcpListener _outputServer;
+        private readonly TcpListener _server;
+        private readonly ConcurrentDictionary<byte, (CancellationTokenSource, Task)> _tasks;
+        
         private readonly object _syncRoot = new object();
-        private readonly ConcurrentBag<Task> _tasks;
 
-        private TcpClient _inputClient;
-        private NetworkStream _inputStream;
-        private TcpClient _outputClient;
-        private NetworkStream _outputStream;
+        private TcpClient _client;
+        private NetworkStream _stream;
 
         private bool _serverStarted;
 
         public Listener()
         {
-            _inputServer = new TcpListener(IPAddress.Any, 32100);
-            _outputServer = new TcpListener(IPAddress.Any, 32101);
-            _hidRawList = new ConcurrentQueue<(string rawHidPath, byte id)>();
-            _tasks = new ConcurrentBag<Task>();
+            _server = new TcpListener(IPAddress.Any, 32100);
+            _tasks = new ConcurrentDictionary<byte, (CancellationTokenSource, Task)>();
             _fdDictionary = new ConcurrentDictionary<byte, int>();
         }
 
-        private void AcceptInputClient(IAsyncResult ar)
+        private void AcceptClient(IAsyncResult ar)
         {
-            var client = _inputServer.EndAcceptTcpClient(ar);
+            if (!_serverStarted) return;
+            
+            var client = _server.EndAcceptTcpClient(ar);
 
-            if (_inputClient is {Connected: true})
+            if (_client != null && _stream != null)
             {
-                Console.WriteLine("Already has a client. Rejecting!");
-                client.Close();
+                Console.WriteLine("Already has a client. Closing!");
+                _client.Close();
+                _client.Dispose();
             }
-            else
-            {
-                Console.WriteLine("Accepting Connection");
-                _inputClient = client;
-                _inputStream = _inputClient.GetStream();
-            }
+            
+            Console.WriteLine("Accepting Connection");
+            _client = client;
+            _stream = client.GetStream();
 
-            _inputServer.BeginAcceptTcpClient(AcceptInputClient, null);
-        }
-
-        private void AcceptOutputClient(IAsyncResult ar)
-        {
-            var client = _outputServer.EndAcceptTcpClient(ar);
-
-            if (_outputClient is {Connected: true})
-            {
-                Console.WriteLine("Already has a client. Rejecting!");
-                client.Close();
-            }
-            else
-            {
-                Console.WriteLine("Accepting Connection");
-                _outputClient = client;
-                _outputStream = _outputClient.GetStream();
-            }
-
-            _outputServer.BeginAcceptTcpClient(AcceptInputClient, null);
+            _server.BeginAcceptTcpClient(AcceptClient, null);
         }
 
         public void Start()
@@ -76,71 +54,77 @@ namespace bt2usb.HID
             if (_serverStarted) return;
             _serverStarted = true;
 
-            _tasks.Add(Task.Factory.StartNew(ProcessReport));
-            while (_hidRawList.TryDequeue(out var tuple))
-                _tasks.Add(Task.Factory.StartNew(() => ForwardLoop(tuple.rawHidPath, tuple.id)));
+            var source = new CancellationTokenSource();
+            
+            _tasks.TryAdd(0xff, (source, Task.Factory.StartNew(() => ProcessReport(source.Token))));
 
-            _inputServer.Start();
-            _inputServer.BeginAcceptTcpClient(AcceptInputClient, null);
-
-            _outputServer.Start();
-            _outputServer.BeginAcceptTcpClient(AcceptOutputClient, null);
+            _server.Start();
+            _server.BeginAcceptTcpClient(AcceptClient, null);
         }
 
-        public void Stop()
+        public void Dispose()
         {
-            if (_serverStarted)
-            {
-                _inputServer.Stop();
-                _outputServer.Stop();
-                _serverStarted = false;
-            }
+            _serverStarted = false;
+            _server.Stop();
+                
+            Console.WriteLine("Server Stopped");
 
             foreach (var task in _tasks)
             {
-                task.Wait();
-                task.Dispose();
+                task.Value.Item1.Cancel();
+                task.Value.Item2.Wait();
+                task.Value.Item1.Dispose();
+                task.Value.Item2.Dispose();
             }
 
+            Console.WriteLine("GamepadForwarder Tasks Stopped");
+            
             _tasks.Clear();
 
-            if (_inputClient != null)
-            {
-                _inputClient.Close();
-                _inputClient = null;
-                _inputStream = null;
-            }
-
-            if (_outputClient != null)
-            {
-                _outputClient.Close();
-                _outputClient = null;
-                _outputStream = null;
-            }
+            _stream?.Dispose();
+            _client?.Dispose();
+            
+            Console.WriteLine("GamepadForwarder Disposed");
         }
 
         public void AddController(string rawHidPath, byte id)
         {
-            if (_serverStarted)
-                _tasks.Add(Task.Factory.StartNew(() => ForwardLoop(rawHidPath, id)));
-            else
-                _hidRawList.Enqueue((rawHidPath, id));
+            var source = new CancellationTokenSource();
+            
+            RemoveController(id);
+            
+            Console.WriteLine("Creating tasks for forwarding loop for controller");
+            _tasks.TryAdd(id, (source, Task.Factory.StartNew(() => ForwardLoop(rawHidPath, id, source.Token))));
         }
 
-        private unsafe void ProcessReport()
+        private unsafe void ProcessReport(CancellationToken cancellationToken)
         {
             const int size = 79;
             var buf = stackalloc byte[size];
             var bufSpan = new Span<byte>(buf, size);
 
-            while (_serverStarted)
+            while (!cancellationToken.IsCancellationRequested)
             {
                 bufSpan.Fill(0);
 
-                if (_outputClient != null && _outputStream != null)
+                try
                 {
-                    var len = _outputStream.Read(bufSpan);
+                    var res = _client?.Client.Poll(1000, SelectMode.SelectRead) ?? false;
 
+                    if (!res) continue;
+
+                    int len;
+
+                    lock (_syncRoot)
+                    {
+                        len = _stream?.Read(bufSpan) ?? -1;                        
+                    }
+                    
+                    if (len < 0)
+                    {
+                        Console.WriteLine("Error reading report stream");
+                        continue;
+                    }
                     if (len != size)
                     {
                         Console.WriteLine("Mismatch {0}", len);
@@ -148,7 +132,6 @@ namespace bt2usb.HID
                     }
 
                     var id = buf[len - 1];
-
                     if (!_fdDictionary.ContainsKey(id))
                     {
                         Console.WriteLine("Controller not found {0}", id);
@@ -162,21 +145,28 @@ namespace bt2usb.HID
                         var ret = Syscall.write(fd, buf, size - 1);
                         if (ret < 0)
                         {
-                            Console.WriteLine("Error writing to FD");
-                            var errno = Stdlib.GetLastError();
-                            Console.WriteLine("{0}", errno);
-
-                            var data = BitConverter.ToString(bufSpan.ToArray());
-                            Console.WriteLine(data);
+                            Console.WriteLine("Error writing to FD for gamepad");
                         }
                     }
                 }
-
-                Thread.Yield();
+                catch
+                {
+                    lock (_syncRoot)
+                    {
+                        _stream?.Dispose();
+                        _client?.Dispose();
+                        _stream = null;
+                        _client = null;                        
+                    }
+                }
+                finally
+                {
+                    Thread.Yield();                    
+                }
             }
         }
 
-        private unsafe void ForwardLoop(string path, byte id)
+        private unsafe void ForwardLoop(string path, byte id, CancellationToken cancellationTokenSource)
         {
             var buf = stackalloc byte[128];
             buf[0] = id;
@@ -198,66 +188,97 @@ namespace bt2usb.HID
                 }
             };
 
-            while (_serverStarted)
+            try
             {
-                var ret = Syscall.poll(pollArr, 1000);
-                if (ret == -1)
+                while (!cancellationTokenSource.IsCancellationRequested)
                 {
-                    Console.WriteLine("Error controller poll");
-                    return;
-                }
-
-                if (ret == 0) continue;
-
-                if ((pollArr[0].revents & PollEvents.POLLIN) != 0)
-                {
-                    lock (_syncRoot)
+                    var ret = Syscall.poll(pollArr, 1000);
+                    if (ret == -1)
                     {
-                        var len = Syscall.read(rawFd, buf + 1, 126);
-                        if (len < 0)
+                        Console.WriteLine("Error controller poll");
+                        return;
+                    }
+                    else if (ret == 0) continue;
+
+                    if ((pollArr[0].revents & PollEvents.POLLIN) != 0)
+                    {
+                        lock (_syncRoot)
                         {
-                            Console.WriteLine("Error read");
-                            return;
-                        }
-
-                        if (len == 0) continue;
-
-                        buf[0] = (byte) (len + 1);
-                        buf[len + 1] = id;
-
-                        var bufSpan = new ReadOnlySpan<byte>(buf, (int) len + 2);
-
-                        if (_inputClient != null && _inputStream != null)
-                            try
+                            var len = Syscall.read(rawFd, buf + 1, 126);
+                            if (len < 0)
                             {
-                                lock (_inputStream)
+                                Console.WriteLine("Error read");
+                                return;
+                            }
+
+                            if (len == 0) continue;
+
+                            buf[0] = (byte) (len + 1);
+                            buf[len + 1] = id;
+
+                            var bufSpan = new ReadOnlySpan<byte>(buf, (int) len + 2);
+
+                            if (_client != null && _stream != null)
+                            {
+                                try
                                 {
-                                    _inputStream.Write(bufSpan);
+                                    lock (_syncRoot)
+                                    {
+                                        _stream.Write(bufSpan);
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Console.WriteLine("Error writing to stream");
+                                    Console.WriteLine(e.Message);
+                                    _stream.Dispose();
+                                    _client.Dispose();
+                                    _stream = null;
+                                    _client = null;
+                                    continue;
                                 }
                             }
-                            catch (Exception)
-                            {
-                                Console.WriteLine("Error writing to stream");
-                                _inputStream.Dispose();
-                                _inputClient.Dispose();
-                                _inputStream = null;
-                                _inputClient = null;
-                            }
+                        }
                     }
-                }
-                else if (
-                    (pollArr[0].revents & PollEvents.POLLERR) > 0 ||
-                    (pollArr[0].revents & PollEvents.POLLHUP) > 0
-                )
-                {
-                    Console.WriteLine("Controller HUP");
-                    return;
-                }
+                    else if (
+                        (pollArr[0].revents & PollEvents.POLLERR) > 0 ||
+                        (pollArr[0].revents & PollEvents.POLLHUP) > 0
+                    )
+                    {
+                        Console.WriteLine("Controller HUP");
+                        return;
+                    }
 
-                Thread.Yield();
+                    Task.Yield();
+                }
+            }
+            finally
+            {
+                _fdDictionary.TryRemove(id, out _);
+                Console.WriteLine("Closing FD");
+                Syscall.close(rawFd);
+            }
+        }
+
+        public void RemoveController(byte id)
+        {
+            Console.Write("Trying to remove controller... ");
+            if (!_tasks.TryRemove(id, out var item))
+            {
+                Console.WriteLine("Not found.");
+                return;
             }
 
-            Console.WriteLine("Closing forwarder for id: {0}", id);
+            if (!item.Item2.IsCompleted)
+            {
+                item.Item1.Cancel();
+                item.Item2.Wait();                
+            }
+            
+            item.Item1.Dispose();
+            item.Item2.Dispose();
+            
+            Console.WriteLine("Removed!");
         }
     }
 }
