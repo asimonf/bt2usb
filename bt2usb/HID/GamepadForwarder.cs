@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using bt2usb.Linux.Udev;
-using bt2usb.Server.Model;
 
 namespace bt2usb.HID
 {

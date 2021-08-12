@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
@@ -8,14 +7,23 @@ using FFT.CRC;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.DualShock4;
+using Dualshock = TestServer.Hid.Sony.DS4;
+using Dualsense = TestServer.Hid.Sony.DualSense;
 
 namespace TestServer
 {
     static class Program
     {
-        private static object _syncRoot = new object();
+        private static readonly object _syncRoot = new object();
+        
         private static NetworkStream _stream;
         private static bool _running = true;
+
+        private enum ReportType: byte
+        {
+            HID_0x11 = 0x11,
+            HID_0x31 = 0x31,
+        }
         
         static async Task Main(string[] args)
         {
@@ -53,6 +61,82 @@ namespace TestServer
             await Forwarder(vigem, dualShock4Controllers);
             
             client.Close();
+        }
+        
+        private static byte[] _touchCounter = new byte[8];
+        private static int[] _reportCounter = new int[8];
+
+        private static unsafe ReportType FilterPacket(byte id, byte[] buffer, byte[] report)
+        {
+            var reportType = (ReportType) buffer[0];
+            
+            switch (reportType)
+            {
+                case ReportType.HID_0x11: // Regular DS4 report
+                    Buffer.BlockCopy(buffer, 3, report, 0, report.Length);
+                    break;
+                case ReportType.HID_0x31:
+                    fixed (void* dualsenseReportPtr = &buffer[2])
+                    {
+                        var dualsenseReport = (Dualsense.InputReport*) dualsenseReportPtr; 
+                        fixed (void* ds4ReportPtr = &report[0])
+                        {
+                            var ds4Report = (Dualshock.InputReport*) ds4ReportPtr;
+                            ds4Report->X = dualsenseReport->X;
+                            ds4Report->Y = dualsenseReport->Y;
+                            ds4Report->RX = dualsenseReport->RX;
+                            ds4Report->RY = dualsenseReport->RY;
+                            ds4Report->Z = dualsenseReport->Z;
+                            ds4Report->RZ = dualsenseReport->RZ;
+                            
+                            ds4Report->Timestamp = (ushort)((dualsenseReport->SensorTimestamp >> 4) & 0xFFFF);
+
+                            ds4Report->GyroX = dualsenseReport->GyroX;
+                            ds4Report->GyroY = dualsenseReport->GyroY;
+                            ds4Report->GyroZ = dualsenseReport->GyroZ;
+
+                            ds4Report->AccelX = dualsenseReport->AccelX;
+                            ds4Report->AccelY = dualsenseReport->AccelY;
+                            ds4Report->AccelZ = dualsenseReport->AccelZ;
+
+                            if (
+                                (dualsenseReport->TouchReport.Finger1.Contact & 0x80) == 0 ||
+                                (dualsenseReport->TouchReport.Finger2.Contact & 0x80) == 0
+                            )
+                            {
+                                ds4Report->PacketNumber = 1;
+                                ds4Report->CurrentDs4Touch.PacketCounter = ++_touchCounter[id];
+                                ds4Report->CurrentDs4Touch.Finger1 = dualsenseReport->TouchReport.Finger1;
+                                ds4Report->CurrentDs4Touch.Finger2 = dualsenseReport->TouchReport.Finger2;
+                            }
+                            else
+                            {
+                                ds4Report->PacketNumber = 0;
+                                ds4Report->CurrentDs4Touch.PacketCounter = _touchCounter[id];
+                                ds4Report->CurrentDs4Touch.Finger1 = dualsenseReport->TouchReport.Finger1;
+                                ds4Report->CurrentDs4Touch.Finger2 = dualsenseReport->TouchReport.Finger2;
+                            }
+
+                            ds4Report->ExtraTouch1.Finger1.Contact = 0x80;
+                            ds4Report->ExtraTouch1.Finger2.Contact = 0x80;
+                            ds4Report->ExtraTouch2.Finger1.Contact = 0x80;
+                            ds4Report->ExtraTouch2.Finger2.Contact = 0x80;
+
+                            ds4Report->Buttons = dualsenseReport->Buttons;
+                            ds4Report->Special = (byte)((dualsenseReport->Special & 0x03) | ((++_reportCounter[id] << 2) & 0xFC));
+
+                            ds4Report->BatteryLevel = (byte) (
+                                (dualsenseReport->Status & 0x0f) |
+                                ((dualsenseReport->Status & 0xf0) > 0 ? 0x10 : 0x00)
+                            );
+
+                            ds4Report->BatteryLevelSpecial = 0x01;
+                        }
+                    }
+                    break;
+            }
+
+            return reportType;
         }
 
         private static async Task Forwarder(
@@ -93,14 +177,14 @@ namespace TestServer
                     continue;
                 }
                 
-                Buffer.BlockCopy(buffer, 3, report, 0, report.Length);
-                
                 var id = buffer[packetSize - 1];
-                if (id != 0)
+                if (id >= 8)
                 {
                     Console.WriteLine("Invalid id (?) - skipping for now");
                     continue;
                 }
+                
+                var reportType = FilterPacket(id, buffer, report);
 
                 IDualShock4Controller controller;
                 if (!dualShock4Controllers.ContainsKey(id))
@@ -114,7 +198,10 @@ namespace TestServer
                     {
                         try
                         {
-                            ControllerOnFeedbackReceived(id, state as IDualShock4Controller, eventArgs);
+                            lock (_syncRoot)
+                            {
+                                ControllerOnFeedbackReceived(id, reportType, state as IDualShock4Controller, eventArgs);                                
+                            }
                         }
                         catch
                         {
@@ -132,46 +219,63 @@ namespace TestServer
                 await Task.Yield();
             }
         }
+        
+        private static int[] _outputReportCounter = new int[8];
 
-        private static unsafe void ControllerOnFeedbackReceived(
-            byte id, 
+        private static void ControllerOnFeedbackReceived(byte id,
+            ReportType reportType,
             IDualShock4Controller controller,
-            DualShock4FeedbackReceivedEventArgs e
-        )
+            DualShock4FeedbackReceivedEventArgs e)
         {
-            const int size = 79;
+            Console.Write(
+                "Feedback for {5} ({6}) -> small: {0}, large: {1}, red: {2}, green, {3}, blue: {4} -- ",
+                e.SmallMotor,
+                e.LargeMotor,
+                e.LightbarColor.Red,
+                e.LightbarColor.Green,
+                e.LightbarColor.Blue,
+                id,
+                reportType
+            );
+            
+            switch (reportType)
+            {
+                case ReportType.HID_0x11:
+                    SendDs4Report(id, e);
+                    break;
+                case ReportType.HID_0x31:
+                    SendDualsenseReport(id, e);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(reportType), reportType, null);
+            }
+        }
+
+        private static unsafe void SendDualsenseReport(byte id, DualShock4FeedbackReceivedEventArgs e)
+        {
+            var size = sizeof(Dualshock.OutputReportBt) + 1;
             var data = stackalloc byte[size];
-
-            data[0] = 0x11;
-            data[1] = 0xC0;
-            data[3] = 0x07;
-
-            var offset = 6;
-
-            data[offset++] = e.SmallMotor;
-            data[offset++] = e.LargeMotor;
-
-            data[offset++] = e.LightbarColor.Red;
-            data[offset++] = e.LightbarColor.Green;
-            data[offset] = e.LightbarColor.Blue;
-
-            /* CRC generation */
-            byte btHeader = 0xa2;
-            var crc = CRC32Calculator.SEED;
-            CRC32Calculator.Add(ref crc, new ReadOnlySpan<byte>(&btHeader, 1));
-            CRC32Calculator.Add(ref crc, new ReadOnlySpan<byte>(data, size - 5));
-            crc = CRC32Calculator.Finalize(crc);
-
-            data[size - 5] = (byte)(crc & 0xFF);
-            data[size - 4] = (byte)((crc >> 8)  & 0xFF);
-            data[size - 3] = (byte)((crc >> 16) & 0xFF);
-            data[size - 2] = (byte)((crc >> 24) & 0xFF);
+            Dualsense.OutputReportBt.CreateInstance((Dualsense.OutputReportBt*) data, ++_outputReportCounter[id], e);
             data[size - 1] = id;
+            var span = new ReadOnlySpan<byte>(data, size);
+            
+            Console.WriteLine("Dualsense report: {0}", size);
+            
+            _stream.Write(span);
+        }
 
-            var buff = new ReadOnlySpan<byte>(data, size);
-
+        private static unsafe void SendDs4Report(byte id, DualShock4FeedbackReceivedEventArgs e)
+        {
+            var size = sizeof(Dualshock.OutputReportBt) + 1;
+            var data = stackalloc byte[size];
+            Dualshock.OutputReportBt.CreateInstance((Dualshock.OutputReportBt*) data, e);
+            data[size - 1] = id;
+            var span = new ReadOnlySpan<byte>(data, size);
+            
+            Console.WriteLine("Dualshock4 report: {0}", size);
+            
             lock (_syncRoot)
-                _stream.Write(buff);
+                _stream.Write(span);
         }
     }
 }
