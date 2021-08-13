@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using FFT.CRC;
 using Nefarius.ViGEm.Client;
@@ -19,9 +21,14 @@ namespace TestServer
         private static NetworkStream _stream;
         private static bool _running = true;
 
+        private static Dictionary<byte, (Thread, PlayerWorker)> _playerThreads =
+            new Dictionary<byte, (Thread, PlayerWorker)>(); 
+
         private enum ReportType: byte
         {
             HID_0x11 = 0x11,
+            HID_0x14 = 0x14,
+            HID_0x16 = 0x16,
             HID_0x31 = 0x31,
         }
         
@@ -29,6 +36,7 @@ namespace TestServer
         {
             var dict = new ConcurrentDictionary<byte, IDualShock4Controller>();
             using var vigem = new ViGEmClient();
+            Crc32Algorithm.InitializeTable(0xedb88320u);
 
             Console.CancelKeyPress += (sender, eventArgs) => _running = false; 
 
@@ -52,7 +60,7 @@ namespace TestServer
         )
         {
             using var client = new TcpClient {LingerState = {Enabled = false}};
-
+            
             await client.ConnectAsync(IPAddress.Parse(ip), 32100);
             
             lock (_syncRoot)
@@ -73,6 +81,8 @@ namespace TestServer
             switch (reportType)
             {
                 case ReportType.HID_0x11: // Regular DS4 report
+                case ReportType.HID_0x14: // Regular DS4 report
+                case ReportType.HID_0x16: // Regular DS4 report
                     Buffer.BlockCopy(buffer, 3, report, 0, report.Length);
                     break;
                 case ReportType.HID_0x31:
@@ -151,14 +161,7 @@ namespace TestServer
             {
                 if (!_stream.DataAvailable) continue;
                 
-                var resp = await _stream.ReadAsync(buffer, 0, 1);
-                if (resp <= 0)
-                {
-                    throw new Exception("Error reading from receiver");
-                }
-                
-                var packetSize = buffer[0];
-                if (packetSize != 79) continue;
+                var packetSize = 79;
 
                 Array.Fill<byte>(buffer, 0);
 
@@ -185,6 +188,15 @@ namespace TestServer
                 }
                 
                 var reportType = FilterPacket(id, buffer, report);
+                var isDs4 = reportType switch
+                {
+                    ReportType.HID_0x11 => true,
+                    ReportType.HID_0x14 => true,
+                    ReportType.HID_0x16 => true,
+                    _ => false
+                };
+
+                // Console.WriteLine("packet: {0}", BitConverter.ToString(report));
 
                 IDualShock4Controller controller;
                 if (!dualShock4Controllers.ContainsKey(id))
@@ -194,21 +206,39 @@ namespace TestServer
                     controller = vigem.CreateDualShock4Controller();
                     dualShock4Controllers.TryAdd(id, controller);
                     controller.Connect();
-                    controller.FeedbackReceived += (state, eventArgs) =>
+                    // controller.FeedbackReceived += (state, eventArgs) =>
+                    // {
+                    //     try
+                    //     {
+                    //         lock (_syncRoot)
+                    //         {
+                    //             ControllerOnFeedbackReceived(id, reportType, state as IDualShock4Controller, eventArgs);                                
+                    //         }
+                    //     }
+                    //     catch
+                    //     {
+                    //         controller.Disconnect();
+                    //         dualShock4Controllers.TryRemove(id, out _);
+                    //     }
+                    // };
+
+                    if (isDs4)
                     {
-                        try
+                        var worker = new PlayerWorker("sbc/avemaria.sbc", _stream, _syncRoot, id);
+                        var playerThread = new Thread(() =>
                         {
-                            lock (_syncRoot)
-                            {
-                                ControllerOnFeedbackReceived(id, reportType, state as IDualShock4Controller, eventArgs);                                
-                            }
-                        }
-                        catch
+                            SendDs4Report(id, new DualShock4FeedbackReceivedEventArgs(0, 0, new LightbarColor(55, 0, 55)));
+                            Thread.Sleep(500);
+                            worker.Playback();
+                        });
+                        playerThread.IsBackground = true;
+                        playerThread.Priority = ThreadPriority.AboveNormal;
+                    
+                        if (_playerThreads.TryAdd(id, (playerThread, worker)))
                         {
-                            controller.Disconnect();
-                            dualShock4Controllers.TryRemove(id, out _);
+                            playerThread.Start();                        
                         }
-                    };
+                    }
                 }
                 else
                 {

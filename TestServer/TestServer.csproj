@@ -7,6 +7,13 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Content Include="sbc\**\*.*">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+
+    <ItemGroup>
       <PackageReference Include="FFT.CRC" Version="0.0.18" />
       <PackageReference Include="Nefarius.ViGEm.Client" Version="1.17.178" />
     </ItemGroup>

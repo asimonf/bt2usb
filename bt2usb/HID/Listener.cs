@@ -99,39 +99,66 @@ namespace bt2usb.HID
 
         private unsafe void ProcessReport(CancellationToken cancellationToken)
         {
-            const int size = 79;
-            var buf = stackalloc byte[size];
-            var bufSpan = new Span<byte>(buf, size);
+            var buf = stackalloc byte[400];
+            var bufSpanRoot = new Span<byte>(buf, 400);
+            
+            Console.WriteLine("Processing reports");
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                bufSpan.Fill(0);
+                bufSpanRoot.Fill(0);
 
+                Span<byte> bufSpan;
+                
                 try
                 {
                     var res = _client?.Client.Poll(1000, SelectMode.SelectRead) ?? false;
 
                     if (!res) continue;
 
-                    int len;
+                    var size = -1;
 
-                    lock (_syncRoot)
+                    var reportId = _stream?.ReadByte() ?? -1;
+                    if (reportId < 0)
                     {
-                        len = _stream?.Read(bufSpan) ?? -1;                        
+                        Console.WriteLine("Error reading report id");
+                        continue;
+                    }
+
+                    buf[0] = (byte) reportId; 
+                    
+                    size = reportId switch
+                    {
+                        0x11 => 78,
+                        0x15 => 334,
+                        _ => size
+                    };
+
+                    if (size < 0)
+                    {
+                        Console.WriteLine("Unrecognized reportId");
+                        continue;
                     }
                     
-                    if (len < 0)
+                    bufSpan = bufSpanRoot.Slice(1, size);
+                    
+                    var bytesReadSoFar = 0;
+                    while (bytesReadSoFar < size)
                     {
-                        Console.WriteLine("Error reading report stream");
-                        continue;
-                    }
-                    if (len != size)
-                    {
-                        Console.WriteLine("Mismatch {0}", len);
-                        continue;
-                    }
+                        var bytesRead = _stream?.Read(bufSpan.Slice(bytesReadSoFar, size - bytesReadSoFar)) ?? -1;
+                        if (bytesRead <= 0) break;
 
-                    var id = buf[len - 1];
+                        bytesReadSoFar += bytesRead;
+                    }
+                
+                    if (bytesReadSoFar != size)
+                    {
+                        Console.WriteLine("Houston, we've got a problem... {0}, {1}", size, bytesReadSoFar);
+                        continue;
+                    }
+                    
+                    var id = buf[size + 1];
+                    
                     if (!_fdDictionary.ContainsKey(id))
                     {
                         Console.WriteLine("Controller not found {0}", id);
@@ -142,15 +169,17 @@ namespace bt2usb.HID
 
                     lock (_syncRoot)
                     {
-                        var ret = Syscall.write(fd, buf, size - 1);
+                        var ret = Syscall.write(fd, buf, (ulong)(size));
                         if (ret < 0)
                         {
                             Console.WriteLine("Error writing to FD for gamepad");
                         }
                     }
                 }
-                catch
+                catch (Exception e)
                 {
+                    Console.WriteLine(e.Message);
+                    Console.WriteLine(e.StackTrace);
                     lock (_syncRoot)
                     {
                         _stream?.Dispose();
@@ -164,12 +193,14 @@ namespace bt2usb.HID
                     Thread.Yield();                    
                 }
             }
+            
+            Console.WriteLine("Done processing reports");
         }
 
         private unsafe void ForwardLoop(string path, byte id, CancellationToken cancellationTokenSource)
         {
-            var buf = stackalloc byte[128];
-            buf[0] = id;
+            var maxSize = 1024;
+            var buf = stackalloc byte[maxSize];
             var rawFd = Syscall.open(path, OpenFlags.O_RDWR | OpenFlags.O_EXCL);
             if (rawFd < 0)
             {
@@ -204,7 +235,7 @@ namespace bt2usb.HID
                     {
                         lock (_syncRoot)
                         {
-                            var len = Syscall.read(rawFd, buf + 1, 126);
+                            var len = Syscall.read(rawFd, buf, (ulong)maxSize - 1);
                             if (len < 0)
                             {
                                 Console.WriteLine("Error read");
@@ -213,10 +244,15 @@ namespace bt2usb.HID
 
                             if (len == 0) continue;
 
-                            buf[0] = (byte) (len + 1);
-                            buf[len + 1] = id;
+                            buf[78] = id;
 
-                            var bufSpan = new ReadOnlySpan<byte>(buf, (int) len + 2);
+                            var bufSpan = new ReadOnlySpan<byte>(buf, 79);
+                            
+                            // if (len > 50)
+                            // {
+                            //     Console.WriteLine("packet ({1}): {0}", BitConverter.ToString(bufSpan.ToArray()), len);
+                            //     continue;
+                            // }
 
                             if (_client != null && _stream != null)
                             {
