@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>netcoreapp3.1</TargetFramework>
+        <TargetFramework>net5.0-windows</TargetFramework>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
@@ -15,7 +15,26 @@
 
     <ItemGroup>
       <PackageReference Include="FFT.CRC" Version="0.0.18" />
+      <PackageReference Include="NAudio" Version="2.0.1" />
+      <PackageReference Include="NAudio.Asio" Version="2.0.0" />
+      <PackageReference Include="NAudio.Core" Version="2.0.0" />
+      <PackageReference Include="NAudio.Midi" Version="2.0.1" />
+      <PackageReference Include="NAudio.Wasapi" Version="2.0.0" />
+      <PackageReference Include="NAudio.WinForms" Version="2.0.1" />
+      <PackageReference Include="NAudio.WinMM" Version="2.0.1" />
       <PackageReference Include="Nefarius.ViGEm.Client" Version="1.17.178" />
+    </ItemGroup>
+
+
+    <ItemGroup>
+      <ProjectReference Include="..\SharpSBC\SharpSBC.csproj" />
+    </ItemGroup>
+
+
+    <ItemGroup>
+      <None Update="libsamplerate-0.dll">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 
 </Project>

@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
@@ -53,10 +54,12 @@ namespace TestServer
             int bytesRead;
             var bufferSize = BtOutputReportLength + 1;
             var outputBuffer = new byte[bufferSize];
-            var audioData = new byte[224];
+            var audioData = new byte[512];
             //while (!exitWorker && (audioData = binReader.ReadBytes(224)).Length > 0)
             testerWatch.Start();
-            while (!_exitWorker && (bytesRead = openedFs.Read(audioData, 0, 224)) > 0)
+            var frameSize = 112;
+            var frameCount = 2;
+            while (!_exitWorker && (bytesRead = openedFs.Read(audioData, 0, frameSize * frameCount)) > 0)
             {
                 //Array.Clear(outputBuffer, 0, BT_OUTPUT_REPORT_LENGTH);
                 //Console.WriteLine(bytesRead);
@@ -101,13 +104,15 @@ namespace TestServer
                 outputBuffer[79] = (byte)((lilEndianCounter / 256) & 255);
                 //outputBuffer[80] = 0x02; // 0x02 Speaker Mode On / 0x24 Headset Mode On
                 outputBuffer[80] = 0x24; // 0x02 Speaker Mode On / 0x24 Headset Mode On
+                
+                Buffer.BlockCopy(audioData, 0, outputBuffer, indexBuffer, bytesRead);
 
                 // AUDIO DATA
-                for (indexAudioData = 0; indexAudioData < bytesRead; indexAudioData++)
-                {
-                    outputBuffer[indexBuffer++] = (byte)(audioData[indexAudioData] & 255);
-                    //indexBuffer++;
-                }
+                // for (indexAudioData = 0; indexAudioData < bytesRead; indexAudioData++)
+                // {
+                //     outputBuffer[indexBuffer++] = audioData[indexAudioData];
+                //     //indexBuffer++;
+                // }
 
                 //outputBuffer[306] = 0x00; outputBuffer[307] = 0x00; outputBuffer[308] = 0x00; outputBuffer[309] = 0x00; outputBuffer[310] = 0x00; outputBuffer[311] = 0x00; /* Start Empty Frames */
                 //outputBuffer[312] = 0x00; outputBuffer[313] = 0x00; outputBuffer[314] = 0x00; outputBuffer[315] = 0x00; outputBuffer[316] = 0x00; outputBuffer[317] = 0x00;

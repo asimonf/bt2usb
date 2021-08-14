@@ -3,9 +3,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using FFT.CRC;
+using NAudio.Wave;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.DualShock4;
@@ -20,9 +22,11 @@ namespace TestServer
         
         private static NetworkStream _stream;
         private static bool _running = true;
+        
+        private static readonly WasapiLoopbackCapture Capture = new WasapiLoopbackCapture();
 
-        private static Dictionary<byte, (Thread, PlayerWorker)> _playerThreads =
-            new Dictionary<byte, (Thread, PlayerWorker)>(); 
+        private static Dictionary<byte, (Thread, CaptureWorker)> _playerThreads =
+            new Dictionary<byte, (Thread, CaptureWorker)>(); 
 
         private enum ReportType: byte
         {
@@ -38,7 +42,15 @@ namespace TestServer
             using var vigem = new ViGEmClient();
             Crc32Algorithm.InitializeTable(0xedb88320u);
 
-            Console.CancelKeyPress += (sender, eventArgs) => _running = false; 
+            Console.CancelKeyPress += (sender, eventArgs) => _running = false;
+
+            Capture.DataAvailable += CaptureOnDataAvailable;
+            Capture.StartRecording();
+            
+            Console.WriteLine(Capture.WaveFormat.Channels);
+            Console.WriteLine(Capture.WaveFormat.Encoding);
+            Console.WriteLine(Capture.WaveFormat.SampleRate);
+            Console.WriteLine(Capture.WaveFormat.BitsPerSample);
 
             while (_running)
             {
@@ -50,6 +62,16 @@ namespace TestServer
                 {
                     Console.WriteLine(e.Message);
                 }                
+            }
+            
+            Capture.StopRecording();
+        }
+
+        private static void CaptureOnDataAvailable(object? sender, WaveInEventArgs e)
+        {
+            foreach (var (_, (_, entry)) in _playerThreads)
+            {
+                entry.LoopbackCaptureOnDataAvailable(sender, e);
             }
         }
 
@@ -224,16 +246,17 @@ namespace TestServer
 
                     if (isDs4)
                     {
-                        var worker = new PlayerWorker("sbc/avemaria.sbc", _stream, _syncRoot, id);
+                        var worker = new CaptureWorker(_stream, _syncRoot, id, Capture.WaveFormat.SampleRate);
                         var playerThread = new Thread(() =>
                         {
                             SendDs4Report(id, new DualShock4FeedbackReceivedEventArgs(0, 0, new LightbarColor(55, 0, 55)));
                             Thread.Sleep(500);
+                            worker.Start();
                             worker.Playback();
                         });
                         playerThread.IsBackground = true;
                         playerThread.Priority = ThreadPriority.AboveNormal;
-                    
+                        
                         if (_playerThreads.TryAdd(id, (playerThread, worker)))
                         {
                             playerThread.Start();                        
