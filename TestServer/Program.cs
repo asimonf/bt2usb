@@ -7,6 +7,7 @@ using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using FFT.CRC;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
@@ -23,7 +24,7 @@ namespace TestServer
         private static NetworkStream _stream;
         private static bool _running = true;
         
-        private static readonly WasapiLoopbackCapture Capture = new WasapiLoopbackCapture();
+        private static WasapiCapture Capture;
 
         private static Dictionary<byte, (Thread, CaptureWorker)> _playerThreads =
             new Dictionary<byte, (Thread, CaptureWorker)>(); 
@@ -44,6 +45,7 @@ namespace TestServer
 
             Console.CancelKeyPress += (sender, eventArgs) => _running = false;
 
+            Capture = new MyLoopbackCapture(20);
             Capture.DataAvailable += CaptureOnDataAvailable;
             Capture.StartRecording();
             
