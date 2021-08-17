@@ -1,53 +1,57 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Mono.Unix.Native;
+using NoGcSockets;
 
 namespace bt2usb.HID
 {
     public class Listener: IDisposable
     {
+        private const int Port = 27000;
+        
         private readonly ConcurrentDictionary<byte, int> _fdDictionary;
-        private readonly TcpListener _server;
+        // private readonly TcpListener _server;
         private readonly ConcurrentDictionary<byte, (CancellationTokenSource, Task)> _tasks;
         
         private readonly object _syncRoot = new object();
 
-        private TcpClient _client;
-        private NetworkStream _stream;
+        // private TcpClient _client;
+        // private NetworkStream _stream;
+
+        private Socket _socket;
 
         private bool _serverStarted;
 
         public Listener()
         {
-            _server = new TcpListener(IPAddress.Any, 32100);
+            // _server = new TcpListener(IPAddress.Any, Port);
             _tasks = new ConcurrentDictionary<byte, (CancellationTokenSource, Task)>();
             _fdDictionary = new ConcurrentDictionary<byte, int>();
         }
 
-        private void AcceptClient(IAsyncResult ar)
-        {
-            if (!_serverStarted) return;
-            
-            var client = _server.EndAcceptTcpClient(ar);
-
-            if (_client != null && _stream != null)
-            {
-                Console.WriteLine("Already has a client. Closing!");
-                _client.Close();
-                _client.Dispose();
-            }
-            
-            Console.WriteLine("Accepting Connection");
-            _client = client;
-            _stream = client.GetStream();
-
-            _server.BeginAcceptTcpClient(AcceptClient, null);
-        }
+        // private void AcceptClient(IAsyncResult ar)
+        // {
+        //     if (!_serverStarted) return;
+        //     
+        //     var client = _server.EndAcceptTcpClient(ar);
+        //
+        //     if (_client != null && _stream != null)
+        //     {
+        //         Console.WriteLine("Already has a client. Closing!");
+        //         _client.Close();
+        //         _client.Dispose();
+        //     }
+        //     
+        //     Console.WriteLine("Accepting Connection");
+        //     _client = client;
+        //     _stream = client.GetStream();
+        //
+        //     _server.BeginAcceptTcpClient(AcceptClient, null);
+        // }
 
         public void Start()
         {
@@ -58,14 +62,16 @@ namespace bt2usb.HID
             
             _tasks.TryAdd(0xff, (source, Task.Factory.StartNew(() => ProcessReport(source.Token))));
 
-            _server.Start();
-            _server.BeginAcceptTcpClient(AcceptClient, null);
+            // _server.Start();
+            // _server.BeginAcceptTcpClient(AcceptClient, null);
+
+            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            _socket.Bind(new IPEndPoint(IPAddress.Any, Port));
         }
 
         public void Dispose()
         {
             _serverStarted = false;
-            _server.Stop();
                 
             Console.WriteLine("Server Stopped");
 
@@ -80,9 +86,8 @@ namespace bt2usb.HID
             Console.WriteLine("GamepadForwarder Tasks Stopped");
             
             _tasks.Clear();
-
-            _stream?.Dispose();
-            _client?.Dispose();
+            
+            _socket.Dispose();
             
             Console.WriteLine("GamepadForwarder Disposed");
         }
@@ -99,11 +104,12 @@ namespace bt2usb.HID
 
         private unsafe void ProcessReport(CancellationToken cancellationToken)
         {
-            var buf = stackalloc byte[400];
-            var bufSpanRoot = new Span<byte>(buf, 400);
+            var buf = new byte[800];
+            var bufSpanRoot = new Span<byte>(buf, 0, 800);
             
             Console.WriteLine("Processing reports");
-
+            var from = new IPEndPointStruct(new IPHolder(AddressFamily.InterNetwork), 0);
+            
             while (!cancellationToken.IsCancellationRequested)
             {
                 bufSpanRoot.Fill(0);
@@ -112,26 +118,30 @@ namespace bt2usb.HID
                 
                 try
                 {
-                    var res = _client?.Client.Poll(1000, SelectMode.SelectRead) ?? false;
+                    var res = _socket.Poll(1000, SelectMode.SelectRead);
+                    // var res = _client?.Client.Poll(1000, SelectMode.SelectRead) ?? false;
 
                     if (!res) continue;
 
                     var size = -1;
 
-                    var reportId = _stream?.ReadByte() ?? -1;
-                    if (reportId < 0)
-                    {
-                        Console.WriteLine("Error reading report id");
-                        continue;
-                    }
+                    int recvBytes = SocketHandler.ReceiveFrom(_socket, buf, 0, buf.Length, SocketFlags.None, ref from);
+                    
+                    // var reportId = _stream?.ReadByte() ?? -1;
+                    // if (reportId < 0)
+                    // {
+                    //     Console.WriteLine("Error reading report id");
+                    //     continue;
+                    // }
 
-                    buf[0] = (byte) reportId; 
+                    var reportId = buf[0]; 
                     
                     size = reportId switch
                     {
                         0x11 => 78,
                         0x15 => 334,
-                        _ => size
+                        0x19 => 548,
+                        _ => -1
                     };
 
                     if (size < 0)
@@ -142,20 +152,20 @@ namespace bt2usb.HID
                     
                     bufSpan = bufSpanRoot.Slice(1, size);
                     
-                    var bytesReadSoFar = 0;
-                    while (bytesReadSoFar < size)
-                    {
-                        var bytesRead = _stream?.Read(bufSpan.Slice(bytesReadSoFar, size - bytesReadSoFar)) ?? -1;
-                        if (bytesRead <= 0) break;
-
-                        bytesReadSoFar += bytesRead;
-                    }
-                
-                    if (bytesReadSoFar != size)
-                    {
-                        Console.WriteLine("Houston, we've got a problem... {0}, {1}", size, bytesReadSoFar);
-                        continue;
-                    }
+                    // var bytesReadSoFar = 0;
+                    // while (bytesReadSoFar < size)
+                    // {
+                    //     var bytesRead = _stream?.Read(bufSpan.Slice(bytesReadSoFar, size - bytesReadSoFar)) ?? -1;
+                    //     if (bytesRead <= 0) break;
+                    //
+                    //     bytesReadSoFar += bytesRead;
+                    // }
+                    //
+                    // if (bytesReadSoFar != size)
+                    // {
+                    //     Console.WriteLine("Houston, we've got a problem... {0}, {1}", size, bytesReadSoFar);
+                    //     continue;
+                    // }
                     
                     var id = buf[size + 1];
                     
@@ -164,15 +174,18 @@ namespace bt2usb.HID
                         Console.WriteLine("Controller not found {0}", id);
                         continue;
                     }
-
+                    
                     var fd = _fdDictionary[id];
 
                     lock (_syncRoot)
                     {
-                        var ret = Syscall.write(fd, buf, (ulong)(size));
-                        if (ret < 0)
+                        fixed (byte* bufPtr = buf)
                         {
-                            Console.WriteLine("Error writing to FD for gamepad");
+                            var ret = Syscall.write(fd, bufPtr, (ulong)(size));
+                            if (ret < 0)
+                            {
+                                Console.WriteLine("Error writing to FD for gamepad");
+                            }                            
                         }
                     }
                 }
@@ -180,13 +193,6 @@ namespace bt2usb.HID
                 {
                     Console.WriteLine(e.Message);
                     Console.WriteLine(e.StackTrace);
-                    lock (_syncRoot)
-                    {
-                        _stream?.Dispose();
-                        _client?.Dispose();
-                        _stream = null;
-                        _client = null;                        
-                    }
                 }
                 finally
                 {
@@ -200,7 +206,7 @@ namespace bt2usb.HID
         private unsafe void ForwardLoop(string path, byte id, CancellationToken cancellationTokenSource)
         {
             var maxSize = 1024;
-            var buf = stackalloc byte[maxSize];
+            var buf = new byte[maxSize];
             var rawFd = Syscall.open(path, OpenFlags.O_RDWR | OpenFlags.O_EXCL);
             if (rawFd < 0)
             {
@@ -221,6 +227,8 @@ namespace bt2usb.HID
 
             try
             {
+                var targetAddress = IPAddress.Parse("192.168.7.255");
+                    
                 while (!cancellationTokenSource.IsCancellationRequested)
                 {
                     var ret = Syscall.poll(pollArr, 1000);
@@ -235,7 +243,12 @@ namespace bt2usb.HID
                     {
                         lock (_syncRoot)
                         {
-                            var len = Syscall.read(rawFd, buf, (ulong)maxSize - 1);
+                            long len;
+                            fixed (byte* bufPtr = buf)
+                            {
+                                len = Syscall.read(rawFd, bufPtr, (ulong)maxSize - 1);
+                            }
+                            
                             if (len < 0)
                             {
                                 Console.WriteLine("Error read");
@@ -244,35 +257,22 @@ namespace bt2usb.HID
 
                             if (len == 0) continue;
 
-                            buf[78] = id;
+                            buf[len] = id;
 
-                            var bufSpan = new ReadOnlySpan<byte>(buf, 79);
-                            
-                            // if (len > 50)
-                            // {
-                            //     Console.WriteLine("packet ({1}): {0}", BitConverter.ToString(bufSpan.ToArray()), len);
-                            //     continue;
-                            // }
-
-                            if (_client != null && _stream != null)
+                            try
                             {
-                                try
+                                lock (_syncRoot)
                                 {
-                                    lock (_syncRoot)
-                                    {
-                                        _stream.Write(bufSpan);
-                                    }
+                                    var sendTarget = new IPEndPointStruct(new IPHolder(IPAddress.Parse("192.168.7.1")), Port);
+                                    // _socket.SendTo(buf, 0, (int) (len + 1), SocketFlags.None, new IPEndPoint(IPAddress.Parse("192.168.7.1"), 27000));
+                                    SocketHandler.SendTo(_socket, buf, 0, (int) (len + 1), SocketFlags.None, ref sendTarget);
                                 }
-                                catch (Exception e)
-                                {
-                                    Console.WriteLine("Error writing to stream");
-                                    Console.WriteLine(e.Message);
-                                    _stream.Dispose();
-                                    _client.Dispose();
-                                    _stream = null;
-                                    _client = null;
-                                    continue;
-                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Console.WriteLine("Error writing to socket");
+                                Console.WriteLine(e.Message);
+                                continue;
                             }
                         }
                     }

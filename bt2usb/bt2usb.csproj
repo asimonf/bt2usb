@@ -44,4 +44,8 @@
       <Content Include="web\test.html" />
     </ItemGroup>
 
+    <ItemGroup>
+      <ProjectReference Include="..\NoGcSockets\NoGcSockets.csproj" />
+    </ItemGroup>
+
 </Project>

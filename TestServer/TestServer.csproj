@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net5.0-windows</TargetFramework>
+        <TargetFramework>netcoreapp3.1</TargetFramework>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
@@ -27,14 +27,9 @@
 
 
     <ItemGroup>
+      <ProjectReference Include="..\NoGcSockets\NoGcSockets.csproj" />
+      <ProjectReference Include="..\SharpSampleRate\SharpSampleRate.csproj" />
       <ProjectReference Include="..\SharpSBC\SharpSBC.csproj" />
-    </ItemGroup>
-
-
-    <ItemGroup>
-      <None Update="libsamplerate-0.dll">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </None>
     </ItemGroup>
 
 </Project>
