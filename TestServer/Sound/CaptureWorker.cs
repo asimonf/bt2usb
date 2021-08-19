@@ -90,7 +90,7 @@ namespace TestServer.Sound
 
         public unsafe void Playback()
         {
-            var minData = (int)_encoder.Codesize * Frames * 2; // 2x because they are 32 bit samples
+            var minData = (int)_encoder.CodeSize * Frames * 2; // 2x because they are 32 bit samples
             var audioData = new byte[minData * 2];
             var s16AudioData = new byte[minData * 2];
             
@@ -130,7 +130,7 @@ namespace TestServer.Sound
                         for (int i = 0; i < Frames; i++)
                         {
                             _encoder.Encode(source , dest, (ulong)minData / 2, out var encoded);
-                            source += _encoder.Codesize;
+                            source += _encoder.CodeSize;
                             dest += encoded;
                         }
                     }

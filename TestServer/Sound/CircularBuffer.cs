@@ -10,9 +10,19 @@ namespace TestServer.Sound
         private int _end;
 
         public int Capacity => _backingBuffer.Length;
-        public int CurrentLength => _end >= _start ? _end - _start : _end + Capacity - _start;
+
+        public int CurrentLength
+        {
+            get
+            {
+                if (_end > _start) return _end - _start;
+                if (_end < _start) return _end + Capacity - _start;
+                return _hasData ? Capacity : 0;
+            }
+        }
         public int Glitches { get; set; }
-        
+
+        private bool _hasData = false;
 
         /// <summary>
         /// Creates a circular buffer
@@ -41,128 +51,107 @@ namespace TestServer.Sound
             }
         }
 
-        public unsafe void CopyFrom(T* src, int length)
-        {
-            if (_end + length > Capacity)
-            {
-                var newLength = Capacity - _end;
-                var remainder = length - newLength;
-
-                // Buffer.BlockCopy(arr, 0, _backingBuffer, _end, newLength);
-                fixed (T* dst = _backingBuffer)
-                {
-                    var newLengthBytes = sizeof(T) * newLength;
-                    var remainderBytes = sizeof(T) * remainder;
-                    Buffer.MemoryCopy(src, &dst[_end], newLengthBytes, newLengthBytes);
-                    Buffer.MemoryCopy(&src[newLength], dst, remainderBytes, remainderBytes);
-                }
-
-                _end = remainder;
-            }
-            else
-            {
-                fixed (T* dst = _backingBuffer)
-                {
-                    var lengthBytes = sizeof(T) * length;
-                    Buffer.MemoryCopy(src, &dst[_end], lengthBytes, lengthBytes);
-                }
-                _end = (_end + length) % Capacity;
-            }
-        }
-        
         public void CopyFrom(T[] arr, int length)
         {
+            int startOffset = 0;
+            if (CurrentLength + length >= Capacity)
+            {
+                startOffset = CurrentLength + length - Capacity;
+            }
+            
+            // Console.WriteLine("capacity: {0}, length: {1}, startOffset {2}", Capacity, CurrentLength, startOffset);
+            
             if (_end + length > Capacity)
             {
                 var newLength = Capacity - _end;
                 var remainder = length - newLength;
 
                 // Buffer.BlockCopy(arr, 0, _backingBuffer, _end, newLength);
-                Buffer.BlockCopy(arr, 0, _backingBuffer, _end, newLength);
-                Buffer.BlockCopy(arr, newLength, _backingBuffer, 0, remainder);
+                Array.Copy(arr, 0, _backingBuffer, _end, newLength);
+                Array.Copy(arr, newLength, _backingBuffer, 0, remainder);
 
                 _end = remainder;
             }
             else
             {
-                Buffer.BlockCopy(arr, 0, _backingBuffer, _end, length);
+                Array.Copy(arr, 0, _backingBuffer, _end, length);
                 _end = (_end + length) % Capacity;
             }
+            
+            _start = (_start + startOffset) % Capacity;
+
+            _hasData = true;
+            
+            // Console.WriteLine("start: {0}, end: {1}", _start, _end);
+        }
+
+        public void CopyTo(T[] destination, int offset, int length)
+        {
+            var zeroFill = 0;
+            // Zero-fill if the request can't be filled with the current buffer contents
+            if (length > CurrentLength)
+            {
+                zeroFill = length - CurrentLength;
+                length -= zeroFill;
+            }
+
+            if (_start + length > Capacity)
+            {
+                var newLength = Capacity - _start;
+                var remainder = length - newLength;
+
+                Array.Copy(_backingBuffer, _start, destination, offset, newLength);
+                Array.Copy(_backingBuffer, 0, destination, offset + newLength, remainder);
+
+                _start = remainder;
+            }
+            else if (length > 0)
+            {
+                Array.Copy(_backingBuffer, _start, destination, offset, length);
+
+                _start = (_start + length) % Capacity;
+            }
+
+            if (zeroFill > 0)
+            {
+                _hasData = false;
+                Array.Fill(destination, new T(), length + offset, zeroFill);
+                Console.WriteLine("Glitch");
+            } else if (_start == _end) _hasData = false;
         }
 
         public void CopyTo(T[] destination, int length)
         {
+            var zeroFill = 0;
             // Zero-fill if the request can't be filled with the current buffer contents
             if (length > CurrentLength)
             {
-                Glitches++;
-                Console.Write(CurrentLength);
-                Console.Write(',');
-                Console.Write(length);
-                Console.Write('.');
-
-                return;
+                zeroFill = length - CurrentLength;
+                length -= zeroFill;
             }
 
-            if (_start + length > Capacity)
+            if (_start + length >= Capacity)
             {
                 var newLength = Capacity - _start;
                 var remainder = length - newLength;
 
-                Buffer.BlockCopy(_backingBuffer, _start, destination, 0, newLength);
-                Buffer.BlockCopy(_backingBuffer, 0, destination, newLength, remainder);
+                Array.Copy(_backingBuffer, _start, destination, 0, newLength);
+                Array.Copy(_backingBuffer, 0, destination, newLength, remainder);
 
                 _start = remainder;
             }
             else if (length > 0)
             {
-                Buffer.BlockCopy(_backingBuffer, _start, destination, 0, length);
+                Array.Copy(_backingBuffer, _start, destination, 0, length);
 
                 _start = (_start + length) % Capacity;
             }
-        }
 
-        public unsafe void CopyTo(T* destination, int length)
-        {
-            // Zero-fill if the request can't be filled with the current buffer contents
-            if (length > CurrentLength)
+            if (zeroFill > 0)
             {
-                Glitches++;
-                Console.Write(CurrentLength);
-                Console.Write(',');
-                Console.Write(length);
-                Console.Write('.');
-
-                return;
-            }
-
-            if (_start + length > Capacity)
-            {
-                var newLength = Capacity - _start;
-                var remainder = length - newLength;
-
-                fixed (T* backPtr = _backingBuffer)
-                {
-                    var newLengthBytes = sizeof(T) * newLength;
-                    var remainderBytes = sizeof(T) * remainder;
-                    
-                    Buffer.MemoryCopy(&backPtr[_start], destination, newLengthBytes, newLengthBytes);
-                    Buffer.MemoryCopy(backPtr, &destination[newLength], remainderBytes, remainderBytes);
-                    
-                }
-
-                _start = remainder;
-            }
-            else if (length > 0)
-            {
-                fixed (T* backPtr = _backingBuffer)
-                {
-                    var lengthBytes = length * sizeof(T);
-                    Buffer.MemoryCopy(&backPtr[_start], destination, lengthBytes, lengthBytes);
-                }
-
-                _start = (_start + length) % Capacity;
-            }
+                _hasData = false;
+                Array.Fill(destination, new T(), length, zeroFill);
+            } else if (_start == _end) _hasData = false;
         }
     }
 }

@@ -16,7 +16,8 @@ namespace SharpSBC
         
         private sbc_t _sbc;
 
-        public ulong Codesize { get; }
+        public ulong CodeSize { get; }
+        public ulong FrameSize { get; }
 
         public SbcEncoder(int sampleRate, int subBands, int bitPool, ChannelMode channelMode, bool snr, int blocks)
         {
@@ -52,17 +53,20 @@ namespace SharpSBC
                 _ => SBC_BLK_16
             };
 
-            Codesize = sbc_get_codesize(ref _sbc);
+            CodeSize = sbc_get_codesize(ref _sbc);
+            FrameSize = sbc_get_frame_length(ref _sbc);
         }
         
         public long Encode(byte* src, byte* dst, ulong dstSize, out long encoded)
         {
             long tmp;
-            var len = sbc_encode(ref _sbc, src, Codesize, dst, dstSize, &tmp);
+            var len = sbc_encode(ref _sbc, src, CodeSize, dst, dstSize, &tmp);
             encoded = tmp;
-
+            
             return len;
         }
+        
+        
 
         public void Dispose()
         {

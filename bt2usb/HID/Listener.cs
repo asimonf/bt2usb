@@ -140,7 +140,7 @@ namespace bt2usb.HID
                     {
                         0x11 => 78,
                         0x15 => 334,
-                        0x19 => 548,
+                        0x19 => 547,
                         _ => -1
                     };
 
@@ -150,7 +150,7 @@ namespace bt2usb.HID
                         continue;
                     }
                     
-                    bufSpan = bufSpanRoot.Slice(1, size);
+                    // bufSpan = bufSpanRoot.Slice(1, size);
                     
                     // var bytesReadSoFar = 0;
                     // while (bytesReadSoFar < size)

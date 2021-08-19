@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using FFT.CRC;
+using NAudio.Utils;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.DualShock4;
@@ -23,12 +24,14 @@ namespace TestServer
         private static IPEndPoint _socketEndPoint;
         private static bool _running = true;
         
-        private static readonly Dictionary<byte, (Thread, CaptureWorker)> PlayerThreads = new Dictionary<byte, (Thread, CaptureWorker)>(8);
+        private static readonly Dictionary<byte, NewCaptureWorker> ControllerWorkers = new Dictionary<byte, NewCaptureWorker>(8);
 
         private static Thread _forwarderThread;
         
         private static readonly byte[] TouchCounter = new byte[8];
         private static readonly int[] ReportCounter = new int[8];
+
+        private static readonly SbcAudioStream SbcAudioStream = new SbcAudioStream();
 
         private enum ReportType: byte
         {
@@ -46,16 +49,15 @@ namespace TestServer
         {
             var dict = new ConcurrentDictionary<byte, IDualShock4Controller>();
             using var vigem = new ViGEmClient();
-
+            
             Console.CancelKeyPress += (sender, eventArgs) => _running = false;
-
+            
             while (_running)
             {
                 try
                 {
                     Setup("192.168.7.2", vigem, dict);
-                    _forwarderThread.Start();
-
+                    Start();
                     while (_forwarderThread.IsAlive)
                     {
                         GC.Collect(GC.MaxGeneration);
@@ -67,6 +69,12 @@ namespace TestServer
                     Console.WriteLine(e.Message);
                 }                
             }
+        }
+
+        private static void Start()
+        {
+            SbcAudioStream.Start();
+            _forwarderThread.Start();
         }
 
         private static void Setup(
@@ -81,7 +89,7 @@ namespace TestServer
 
             _forwarderThread = new Thread(() =>
             {
-                Forwarder(vigem, dualShock4Controllers);
+                InputForwarder(vigem, dualShock4Controllers);
             });
         }
 
@@ -101,7 +109,7 @@ namespace TestServer
                     }
                     else
                     {
-                        Console.WriteLine("Has no input data");
+                        // Console.WriteLine("Has no input data");
                         return false;
                     }
                 case ReportType.HID_0x31:
@@ -171,7 +179,7 @@ namespace TestServer
             }
         }
 
-        private static void Forwarder(
+        private static void InputForwarder(
             ViGEmClient vigem,
             ConcurrentDictionary<byte,IDualShock4Controller> dualShock4Controllers
         )
@@ -264,26 +272,13 @@ namespace TestServer
 
                     if (isDs4)
                     {
-                        var worker = new CaptureWorker(_socket, SyncRoot, id);
+                        var worker = new NewCaptureWorker(SbcAudioStream, _socket, SyncRoot, id);
                         controller.FeedbackReceived += (sender, args) =>
                         {
                             worker.SubmitFeedback(args);
                         };
 
-                        var playerThread = new Thread(() =>
-                        {
-                            worker.Start();
-                            worker.Playback();
-                        })
-                        {
-                            IsBackground = true, 
-                            Priority = ThreadPriority.Highest
-                        };
-                    
-                        if (PlayerThreads.TryAdd(id, (playerThread, worker)))
-                        {
-                            playerThread.Start();                        
-                        }
+                        ControllerWorkers.TryAdd(id, worker);
                     }
                 }
                 else
@@ -294,11 +289,6 @@ namespace TestServer
                 if (hasInputData)
                 {
                     controller.SubmitRawReport(report);                    
-                }
-                else
-                {
-                    if (reportType != ReportType.HID_0x13)
-                        Console.WriteLine("No input for {0:x2}: crc: {1}", rawReportType, BitConverter.ToString(buffer, packetSize -5, 5));
                 }
 
                 Thread.Yield();
